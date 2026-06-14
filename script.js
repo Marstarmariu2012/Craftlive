@@ -38,6 +38,10 @@ let inventar = new Array(8).fill(null);
 let aktiverSlot = 0;
 let craftingOffen = false;
 let ausgewähltesRezept = null;
+let baumHinweis = '';
+let baumHinweisBis = 0;
+let baumZiehAktiv = false;
+let baumTragend = null;
 let schafe = [];
 
 let npcX = 300, npcY = 300;
@@ -47,7 +51,7 @@ let rezepte = [
     { name:'zauninventar', bild:null, zutaten:[{typ:'bretter',anzahl:2},{typ:'inventarholz',anzahl:2}], ergebnis:1 },
     { name:'axt',          bild:null, zutaten:[{typ:'inventarholz',anzahl:3}], ergebnis:1 },
     {name:'messer', bild:null,zutaten:[{typ:'inventarholz}',anzahl:1},{typ:'steininventar',anzahl:1}],ergebnis:1},
-    { name:'hacke',        bild:null, zutaten:[{typ:'inventarholz',anzahl:2},{typ:'bretter',anzahl:1}], ergebnis:1 },
+    { name:'hacke',        bild:null, zutaten:[{typ:'inventarholz',anzahl:2},{typ:'steininventar',anzahl:2}], ergebnis:1 },
     { name:'spitzhacke',   bild:null, zutaten:[{typ:'inventarholz',anzahl:2},{typ:'steininventar',anzahl:3}], ergebnis:1 },
 ];
 
@@ -102,9 +106,10 @@ function setup() {
     inventar[1] = { typ:'messer', anzahl:1 };
     inventar[2] = { typ:'spitzhacke', anzahl:1 };
     rezepte[0].bild = zauninventarImg;
-    rezepte[3].bild = messerImg;
+    rezepte[2].bild = messerImg;
     rezepte[1].bild = axtImg;
-    rezepte[2].bild = hacke;
+    rezepte[4].bild = spitzhacke;
+    rezepte[3].bild = hacke;
     haendler = { x:500, y:500, richtungX:1, richtungY:0, timer:0, schritt:0 };
 }
 
@@ -153,6 +158,17 @@ function draw() {
     updateHaendler();
     drawHaendler();
     drawFadenkreuz();
+    if (baumZiehAktiv) drawZiehtBaum();
+    if (baumHinweisBis > millis()) {
+        push();
+        textAlign(CENTER);
+        fill(255, 245, 180);
+        stroke(0, 0, 0, 180);
+        strokeWeight(2);
+        textSize(18);
+        text(baumHinweis, width/2, 40);
+        pop();
+    }
 
     fill(255,0,0); noStroke(); rectMode(CORNER);
     rect(width/2 - 25, height/2 - 25, 50, 50);
@@ -252,7 +268,8 @@ function blockAnPosition(weltX, weltY) {
 }
 
 function istZaun(neuesKameraX, neuesKameraY) {
-    return blockAnPosition(width/2 - neuesKameraX, height/2 - neuesKameraY) === 15;
+    const typ = blockAnPosition(width/2 - neuesKameraX, height/2 - neuesKameraY);
+    return typ === 15 || typ === 3 || typ === 4;
 }
 
 function zeichneChunk(chunkId, offsetX, offsetY) {
@@ -298,6 +315,90 @@ function getZielBlock() {
     let lokalCol = blockCol - chunkX*19, lokalRow = blockRow - chunkY*9;
     return { chunkId:'chunk_'+chunkX+'_'+chunkY, blockIndex:lokalRow*19+lokalCol, zielX:blockCol*100, zielY:blockRow*100 };
 }
+
+function getBlockUnterSpieler() {
+    let sx = width/2 - kameraX, sy = height/2 - kameraY;
+    let blockCol = floor(sx/100), blockRow = floor(sy/100);
+    let chunkX = floor(blockCol/19), chunkY = floor(blockRow/9);
+    let lokalCol = blockCol - chunkX*19, lokalRow = blockRow - chunkY*9;
+    return { chunkId:'chunk_'+chunkX+'_'+chunkY, blockIndex:lokalRow*19+lokalCol };
+}
+
+function getBlockHinterSpieler() {
+    let sx = width/2 - kameraX, sy = height/2 - kameraY;
+    let zx = sx, zy = sy;
+    if (richtung === 'oben')   zy += 100;
+    if (richtung === 'unten')  zy -= 100;
+    if (richtung === 'links')  zx += 100;
+    if (richtung === 'rechts') zx -= 100;
+    let blockCol = floor(zx/100), blockRow = floor(zy/100);
+    let chunkX = floor(blockCol/19), chunkY = floor(blockRow/9);
+    let lokalCol = blockCol - chunkX*19, lokalRow = blockRow - chunkY*9;
+    return { chunkId:'chunk_'+chunkX+'_'+chunkY, blockIndex:lokalRow*19+lokalCol };
+}
+
+function zeigeBaumHinweis(text, dauer = 900) {
+    baumHinweis = text;
+    baumHinweisBis = millis() + dauer;
+}
+
+function clearBaum(chunkId, blockIndex) {
+    if (!chunks[chunkId]) return false;
+
+    let oben = null;
+    let unten = null;
+
+    if (chunks[chunkId][blockIndex] === 4 && blockIndex + 19 < 171 && chunks[chunkId][blockIndex + 19] === 3) {
+        oben = blockIndex;
+        unten = blockIndex + 19;
+    } else if (chunks[chunkId][blockIndex] === 3 && blockIndex - 19 >= 0 && chunks[chunkId][blockIndex - 19] === 4) {
+        oben = blockIndex - 19;
+        unten = blockIndex;
+    }
+
+    if (oben === null || unten === null) return false;
+
+    baumTragend = { chunkId, oben, unten };
+    chunks[chunkId][oben] = 1;
+    chunks[chunkId][unten] = 1;
+    return true;
+}
+
+function setBaum(chunkId, blockIndex) {
+    if (!chunks[chunkId]) return false;
+
+    const obenIndex = blockIndex - 19;
+    const untenIndex = blockIndex;
+
+    if (obenIndex < 0 || untenIndex < 0 || untenIndex + 19 >= 171) return false;
+
+    const spieler = getBlockUnterSpieler();
+    if (chunkId === spieler.chunkId && (obenIndex === spieler.blockIndex || untenIndex === spieler.blockIndex)) return false;
+
+    const oben = chunks[chunkId][obenIndex];
+    const unten = chunks[chunkId][untenIndex];
+    const darfOben = (oben === 1 || oben === 2 || oben === 11 || oben === 12 || oben === 13 || oben === 14);
+    const darfUnten = (unten === 1 || unten === 2 || unten === 11 || unten === 12 || unten === 13 || unten === 14);
+
+    if (!darfOben || !darfUnten) return false;
+
+    chunks[chunkId][obenIndex] = 4;
+    chunks[chunkId][untenIndex] = 3;
+    baumTragend = null;
+    return true;
+}
+
+function drawZiehtBaum() {
+    let x = width/2, y = height/2;
+    if (richtung === 'oben')   y += 110;
+    if (richtung === 'unten')  y -= 110;
+    if (richtung === 'links')  x += 110;
+    if (richtung === 'rechts') x -= 110;
+    imageMode(CENTER);
+    image(baumOben, x, y - 50, 100, 100);
+    image(baumUnten, x, y + 50, 100, 100);
+}
+
 
 function updateSchafe() {
     for (let s of schafe) {
@@ -614,6 +715,29 @@ function keyPressed() {
     if (key >= '1' && key <= '8') aktiverSlot = int(key) - 1;
     if (key === 'i' || key === 'I') { craftingOffen = !craftingOffen; ausgewähltesRezept = null; }
 
+    if (key === 'p' || key === 'P') {
+        if (!baumZiehAktiv) {
+            let ziel = getZielBlock();
+            if (clearBaum(ziel.chunkId, ziel.blockIndex)) {
+                baumZiehAktiv = true;
+                zeigeBaumHinweis('Baum gehalten – U zum Loslassen');
+            }
+        }
+        return;
+    }
+
+    if (key === 'u' || key === 'U') {
+        if (baumZiehAktiv) {
+            let ziel = getZielBlock();
+            if (setBaum(ziel.chunkId, ziel.blockIndex)) {
+                baumZiehAktiv = false;
+            } else {
+                zeigeBaumHinweis('Hier geht der Baum nicht hin');
+            }
+        }
+        return;
+    }
+
     if (key === 'e' || key === 'E') {
         let sx = width/2 - kameraX, sy = height/2 - kameraY;
         if (dist(sx, sy, haendler.x, haendler.y) < 150) {
@@ -713,7 +837,7 @@ function keyPressed() {
         if (inventar[aktiverSlot] && inventar[aktiverSlot].typ === 'spitzhacke') {
             if (chunks[chunkId] && chunks[chunkId][blockIndex] === 16) {
                 chunks[chunkId][blockIndex] = 1;
-                addInventar('stein', 1);
+                addInventar('steininventar', 1);
             }
         }
         if (inventar[aktiverSlot] && inventar[aktiverSlot].typ === 'inventarholz') {
